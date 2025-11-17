@@ -32,6 +32,8 @@ class IndexOptions:
         quantizer: Optional[str] = None,
         pq_m: Optional[int] = None,
         pq_nbits: Optional[int] = None,
+        max_degree: int = 32,
+        ef_construction: int = 40,
     ):
         """Index options.
 
@@ -39,9 +41,11 @@ class IndexOptions:
             index_type: Type of vector index (currently only 'hnsw' is supported)
             metric_type: Distance metric ('l2_distance' or 'inner_product')
             dim: Dimension of the vector
-            quantizer: Quantizer type ('pq' for product quantization, 'sq4/sq8' for scalar quantization)
+            quantizer: Quantizer type ('pq' for product quantization, 'sq4'/'sq8' for scalar quantization, 'flat' for no quantization)
             pq_m: Number of sub-quantizers for PQ (required if quantizer='pq')
             pq_nbits: Number of bits per sub-quantizer for PQ (required if quantizer='pq')
+            max_degree: Maximum degree for HNSW index (default: 32)
+            ef_construction: Size of the dynamic candidate list for HNSW index construction (default: 40)
         """
         self.index_type = index_type.lower()
         self.metric_type = metric_type.lower()
@@ -49,6 +53,8 @@ class IndexOptions:
         self.quantizer = quantizer.lower() if quantizer else None
         self.pq_m = pq_m
         self.pq_nbits = pq_nbits
+        self.max_degree = max_degree
+        self.ef_construction = ef_construction
 
         self._validate()
 
@@ -56,7 +62,7 @@ class IndexOptions:
         """Validate index options."""
         supported_index_types = ["hnsw"]
         supported_distance_types = ["l2_distance", "inner_product"]
-        supported_quantizers = ["pq", "sq4", "sq8"]
+        supported_quantizers = ["pq", "sq4", "sq8", "flat"]
 
         if self.index_type not in supported_index_types:
             raise ValueError(
@@ -73,6 +79,12 @@ class IndexOptions:
                 f"Unsupported quantizer: {self.quantizer}. Supported: {supported_quantizers}"
             )
 
+        if self.max_degree <= 0:
+            raise ValueError("max_degree must be positive")
+
+        if self.ef_construction <= 0:
+            raise ValueError("ef_construction must be positive")
+
         if self.quantizer == "pq":
             if self.pq_m is None or self.pq_nbits is None:
                 raise ValueError("pq_m and pq_nbits are required when quantizer='pq'")
@@ -81,6 +93,9 @@ class IndexOptions:
         elif self.quantizer == "sq8":
             if self.pq_m is not None or self.pq_nbits is not None:
                 raise ValueError("pq_m and pq_nbits should not be set when quantizer='sq8'")
+        elif self.quantizer == "flat":
+            if self.pq_m is not None or self.pq_nbits is not None:
+                raise ValueError("pq_m and pq_nbits should not be set when quantizer='flat'")
         else:
             if self.pq_m is not None or self.pq_nbits is not None:
                 raise ValueError("pq_m and pq_nbits should only be set when quantizer='pq'")
@@ -619,6 +634,8 @@ class DorisDDLCompiler:
             props.append(f'"index_type"="{options.index_type}"')
             props.append(f'"metric_type"="{options.metric_type}"')
             props.append(f'"dim"={options.dim}')
+            props.append(f'"max_degree"={options.max_degree}')
+            props.append(f'"ef_construction"={options.ef_construction}')
             if options.quantizer:
                 props.append(f'"quantizer"="{options.quantizer}"')
             if options.pq_m is not None:
@@ -655,6 +672,8 @@ class DorisDDLCompiler:
         props.append(f'"index_type"="{index_options.index_type}"')
         props.append(f'"metric_type"="{index_options.metric_type}"')
         props.append(f'"dim"={index_options.dim}')
+        props.append(f'"max_degree"={index_options.max_degree}')
+        props.append(f'"ef_construction"={index_options.ef_construction}')
         if index_options.quantizer:
             props.append(f'"quantizer"="{index_options.quantizer}"')
         if index_options.pq_m is not None:
@@ -1334,6 +1353,7 @@ class DorisVectorClient:
         self.with_sessions({
             "enable_profile": "false",
             "parallel_pipeline_task_num": "1",
+            "hnsw_ef_search": "32",
         })
 
     def create_table(
