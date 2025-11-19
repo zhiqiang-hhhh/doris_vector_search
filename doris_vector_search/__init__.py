@@ -6,7 +6,7 @@ import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, List, Optional, Self, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Self, Tuple, Union, Literal
 
 import pandas as pd
 import pyarrow as pa
@@ -26,7 +26,7 @@ class IndexOptions:
 
     def __init__(
         self,
-        index_type: str = "hnsw",
+        index_type: Literal["hnsw", "ivf"] = "hnsw",
         metric_type: str = "l2_distance",
         dim: int = -1,
         quantizer: Optional[str] = None,
@@ -34,6 +34,7 @@ class IndexOptions:
         pq_nbits: Optional[int] = None,
         max_degree: int = 32,
         ef_construction: int = 40,
+        nlist: int = 1024,
     ):
         """Index options.
 
@@ -46,6 +47,7 @@ class IndexOptions:
             pq_nbits: Number of bits per sub-quantizer for PQ (required if quantizer='pq')
             max_degree: Maximum degree for HNSW index (default: 32)
             ef_construction: Size of the dynamic candidate list for HNSW index construction (default: 40)
+            nlist: Number of cluster units (default: 1024)
         """
         self.index_type = index_type.lower()
         self.metric_type = metric_type.lower()
@@ -55,12 +57,13 @@ class IndexOptions:
         self.pq_nbits = pq_nbits
         self.max_degree = max_degree
         self.ef_construction = ef_construction
+        self.nlist = nlist
 
         self._validate()
 
     def _validate(self):
         """Validate index options."""
-        supported_index_types = ["hnsw"]
+        supported_index_types = ["hnsw", "ivf"]
         supported_distance_types = ["l2_distance", "inner_product"]
         supported_quantizers = ["pq", "sq4", "sq8", "flat"]
 
@@ -84,6 +87,9 @@ class IndexOptions:
 
         if self.ef_construction <= 0:
             raise ValueError("ef_construction must be positive")
+
+        if self.nlist <= 0:
+            raise ValueError("nlist must be positive")
 
         if self.quantizer == "pq":
             if self.pq_m is None or self.pq_nbits is None:
@@ -635,7 +641,13 @@ class DorisDDLCompiler:
             props.append(f'"metric_type"="{options.metric_type}"')
             props.append(f'"dim"={options.dim}')
             props.append(f'"max_degree"={options.max_degree}')
-            props.append(f'"ef_construction"={options.ef_construction}')
+            if options.index_type == "hnsw":
+                props.append(f'"ef_construction"={options.ef_construction}')
+            elif options.index_type == "ivf":
+                props.append(f'"nlist"={options.nlist}')
+            else:
+                raise ValueError(f"unknown index_type: {options.index_type}")
+
             if options.quantizer:
                 props.append(f'"quantizer"="{options.quantizer}"')
             if options.pq_m is not None:
