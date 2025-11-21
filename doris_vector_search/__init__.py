@@ -47,7 +47,7 @@ class IndexOptions:
             pq_nbits: Number of bits per sub-quantizer for PQ (required if quantizer='pq')
             max_degree: Maximum degree for HNSW index (default: 32)
             ef_construction: Size of the dynamic candidate list for HNSW index construction (default: 40)
-            nlist: Number of cluster units (default: 1024)
+            nlist: Number of cluster units for IVF index construction (default: 1024)
         """
         self.index_type = index_type.lower()
         self.metric_type = metric_type.lower()
@@ -640,8 +640,8 @@ class DorisDDLCompiler:
             props.append(f'"index_type"="{options.index_type}"')
             props.append(f'"metric_type"="{options.metric_type}"')
             props.append(f'"dim"={options.dim}')
-            props.append(f'"max_degree"={options.max_degree}')
             if options.index_type == "hnsw":
+                props.append(f'"max_degree"={options.max_degree}')
                 props.append(f'"ef_construction"={options.ef_construction}')
             elif options.index_type == "ivf":
                 props.append(f'"nlist"={options.nlist}')
@@ -684,8 +684,13 @@ class DorisDDLCompiler:
         props.append(f'"index_type"="{index_options.index_type}"')
         props.append(f'"metric_type"="{index_options.metric_type}"')
         props.append(f'"dim"={index_options.dim}')
-        props.append(f'"max_degree"={index_options.max_degree}')
-        props.append(f'"ef_construction"={index_options.ef_construction}')
+        if index_options.index_type == "hnsw":
+            props.append(f'"max_degree"={index_options.max_degree}')
+            props.append(f'"ef_construction"={index_options.ef_construction}')
+        elif index_options.index_type == "ivf":
+            props.append(f'"nlist"={index_options.nlist}')
+        else:
+            raise ValueError(f"unknown index type: {index_options.index_type}")
         if index_options.quantizer:
             props.append(f'"quantizer"="{index_options.quantizer}"')
         if index_options.pq_m is not None:
@@ -1463,7 +1468,7 @@ class DorisVectorClient:
             table_name=table_name,
             columns=columns,
             key_column=key_column,
-            vector_column=vector_column if create_index else None,
+            vector_column=vector_column,
             vector_options=vector_options,
             num_buckets=num_buckets,
         )
