@@ -1382,6 +1382,7 @@ class DorisVectorClient:
         load_options: Optional[LoadOptions] = None,
         overwrite: bool = False,
         insert_data: bool = True,
+        num_buckets: Optional[int] = None,
     ) -> DorisTable:
         """Create a new table from various data formats with dynamic schema inference.
 
@@ -1398,6 +1399,7 @@ class DorisVectorClient:
             load_options: Options for data loading (default: None, uses arrow format)
             overwrite: Whether to drop the table if it already exists (default: False)
             insert_data: Whether to insert the provided data into the table (default: True)
+            num_buckets: Number of buckets for distribution (default: None, None means auto-detects from alive backends)
         """
         # Set default load options if not provided
         if not load_options:
@@ -1459,9 +1461,10 @@ class DorisVectorClient:
                     index_options.dim = schema_info.vector_dim
             vector_options = index_options
 
-        # Determine buckets by counting alive backends
-        num_buckets = self._get_alive_be_count()
-        logger.debug(f"Using {num_buckets} BUCKETS according to alive backends")
+        # Determine buckets by counting alive backends or user-specified value
+        if num_buckets is None:
+            num_buckets = self._get_alive_be_count()
+            logger.debug(f"Using {num_buckets} BUCKETS according to alive backends")
 
         # Create TableOptions object
         table_options = TableOptions(
