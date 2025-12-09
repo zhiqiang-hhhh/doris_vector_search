@@ -426,69 +426,6 @@ def block_to_arrow_table(block: Block) -> pa.Table:
 class DorisSQLCompiler:
     """Doris-specific SQL compiler for vector search queries."""
 
-    def compile_vector_search_query(
-        self,
-        table_name: str,
-        query_vector: List[float],
-        vector_column: str,
-        limit: Optional[int] = None,
-        distance_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
-        where_conditions: Optional[List[str]] = None,
-        selected_columns: Optional[List[str]] = None,
-        metric_type: str = "l2_distance",
-    ) -> str:
-        """Compile vector search query to Doris SQL."""
-        vector_str = f"[{','.join(map(str, query_vector))}]"
-
-        # Determine which columns to select
-        if selected_columns:
-            select_columns = selected_columns
-        else:
-            # Default: select all columns
-            select_columns = ["*"]
-
-        # Build SELECT clause
-        select_clause = ", ".join(f"`{col}`" for col in select_columns)
-
-        distance_fn = f"{metric_type}_approximate"
-
-        # Build WHERE clause
-        where_parts = []
-
-        # Add distance range conditions
-        if distance_range:
-            lower_bound, upper_bound = distance_range
-            if lower_bound is not None:
-                where_parts.append(
-                    f"{distance_fn}(`{vector_column}`, {vector_str}) >= {lower_bound}"
-                )
-            if upper_bound is not None:
-                where_parts.append(
-                    f"{distance_fn}(`{vector_column}`, {vector_str}) <= {upper_bound}"
-                )
-
-        # Add user-defined WHERE conditions
-        if where_conditions:
-            where_parts.extend(where_conditions)
-
-        where_clause = ""
-        if where_parts:
-            where_clause = f"WHERE {' AND '.join(where_parts)}"
-
-        # Build ORDER BY
-        if metric_type == "inner_product":
-            order_clause = f"ORDER BY {distance_fn}(`{vector_column}`, {vector_str}) DESC"
-        else:
-            order_clause = f"ORDER BY {distance_fn}(`{vector_column}`, {vector_str}) ASC"
-
-        # Build LIMIT
-        limit_clause = f"LIMIT {limit}" if limit else ""
-
-        # Construct full SQL
-        sql = f"SELECT {select_clause} FROM `{table_name}` {where_clause} {order_clause} {limit_clause}"
-
-        return sql
-
     def compile_vector_search_query_prepared(
         self,
         table_name: str,
@@ -499,6 +436,7 @@ class DorisSQLCompiler:
         where_conditions: Optional[List[str]] = None,
         selected_columns: Optional[List[str]] = None,
         metric_type: str = "l2_distance",
+        include_distance: bool = False,
     ) -> Tuple[str, List[Any]]:
         """Compile vector search query to Doris SQL with prepared statement.
 
@@ -512,13 +450,17 @@ class DorisSQLCompiler:
 
         # Determine which columns to select
         if selected_columns:
-            select_columns = selected_columns
+            select_columns = selected_columns.copy()
         else:
             # Default: select all columns
             select_columns = ["*"]
 
         # Build SELECT clause
-        select_clause = ", ".join(f"`{col}`" for col in select_columns)
+        if include_distance:
+            distance_fn = f"{metric_type}_approximate"
+            select_columns.append(f"{distance_fn}(`{vector_column}`, CAST(? AS ARRAY<FLOAT>)) AS distance")
+            params.append(vector_value)
+        select_clause = ", ".join(select_columns)
 
         distance_fn = f"{metric_type}_approximate"
 
@@ -727,11 +669,13 @@ class VectorSearchQuery:
         query_vector: List[float],
         vector_column: str,
         metric_type: str = "l2_distance",
+        include_distance: bool = False,
     ):
         self.table = table
         self.query_vector = query_vector
         self.vector_column = vector_column
         self.metric_type = metric_type
+        self.include_distance = include_distance
         self.limit_value: Optional[int] = None
         self.distance_range_upper: Optional[float] = None
         self.distance_range_lower: Optional[float] = None
@@ -862,6 +806,7 @@ class VectorSearchQuery:
             where_conditions=self.where_conditions if self.where_conditions else None,
             selected_columns=select_columns,
             metric_type=self.metric_type,
+            include_distance=self.include_distance,
         )
 
         logger.debug(f'generated sql: "{sql}"')
@@ -873,6 +818,8 @@ class VectorSearchQuery:
         rows = cursor.fetchall()
 
         select_columns = self.selected_columns or all_columns
+        if self.include_distance:
+            select_columns = select_columns + ["distance"]
         col_data = {col: [] for col in select_columns}
 
         # data = [list(column) for column in zip(*rows)]
@@ -990,6 +937,7 @@ class DorisTable:
         query_vector: List[float],
         vector_column: Optional[str] = None,
         metric_type: str = "l2_distance",
+        include_distance: bool = False,
     ) -> VectorSearchQuery:
         """Perform vector search."""
         if vector_column is None:
@@ -1001,7 +949,7 @@ class DorisTable:
                 f"Invalid query vector length: vector column dim={self._get_vector_dim(vector_column)}, but query vector length={len(query_vector)}"
             )
 
-        return VectorSearchQuery(self, query_vector, vector_column, metric_type)
+        return VectorSearchQuery(self, query_vector, vector_column, metric_type, include_distance)
 
     def add(self, block: Block, load_options: Optional[LoadOptions] = None):
         """Add data to the table.
@@ -1371,6 +1319,7 @@ class DorisVectorClient:
             "enable_profile": "false",
             "parallel_pipeline_task_num": "1",
             "hnsw_ef_search": "32",
+            "ivf_nprobe": "32",
         })
 
     def create_table(
