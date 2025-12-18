@@ -944,12 +944,7 @@ class DorisTable:
             # If vector_column is not specified, try to auto detect it
             vector_column = self._detect_vector_column()
 
-        if self._get_vector_dim(vector_column) != len(query_vector):
-            raise ValueError(
-                f"Invalid query vector length: vector column dim={self._get_vector_dim(vector_column)}, but query vector length={len(query_vector)}"
-            )
-
-        return VectorSearchQuery(self, query_vector, vector_column, metric_type, include_distance)
+        return VectorSearchQuery(self, query_vector, vector_column, metric_type)
 
     def add(self, block: Block, load_options: Optional[LoadOptions] = None):
         """Add data to the table.
@@ -1207,13 +1202,25 @@ class DorisTable:
                 # Handle bytes to string conversion
                 if isinstance(create_table_sql, bytes):
                     create_table_sql = create_table_sql.decode('utf-8')
-                # Parse the PROPERTIES in the INDEX clause
-                # Looking for: USING ANN PROPERTIES("dim" = "xxx", ...)
-                match = re.search(r'USING\s+ANN\s+PROPERTIES\s*\((.*?)\)', create_table_sql, re.IGNORECASE)
+                # Parse the PROPERTIES of the index for the given vector_column
+                # Prefer a clause that explicitly references the target column, e.g.:
+                #   INDEX idx_vec(`vec`) USING ANN PROPERTIES("dim"=128, ...)
+                idx_pattern = rf'INDEX\s+[^\(]*\(\s*`?{re.escape(vector_column)}`?\s*\)\s+USING\s+ANN\s+PROPERTIES\s*\((.*?)\)'
+                match = re.search(idx_pattern, create_table_sql, re.IGNORECASE | re.DOTALL)
+                properties_str = None
                 if match:
                     properties_str = match.group(1)
-                    # Find "dim" = "xxx"
-                    dim_match = re.search(r'"dim"\s*=\s*"(\d+)"', properties_str)
+                else:
+                    # Fallback: if we cannot locate a specific index bound to the column,
+                    # use the first ANN PROPERTIES clause (single-index tables)
+                    any_match = re.search(r'USING\s+ANN\s+PROPERTIES\s*\((.*?)\)', create_table_sql, re.IGNORECASE | re.DOTALL)
+                    if any_match:
+                        properties_str = any_match.group(1)
+
+                if properties_str:
+                    # Support both quoted and unquoted numeric values for dim
+                    # Examples: "dim"=128  or  "dim" = "128"
+                    dim_match = re.search(r'"?dim"?\s*=\s*"?(\d+)"?', properties_str, re.IGNORECASE)
                     if dim_match:
                         return int(dim_match.group(1))
         except Exception as e:
